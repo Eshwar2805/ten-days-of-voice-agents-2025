@@ -1,0 +1,38 @@
+[
+  {
+    "id": "variables",
+    "title": "Variables",
+    "summary": "Variables are named containers used to store values so you can reuse or change them later. They help make code more readable, dynamic, and easier to update.",
+    "sample_question": "What is a variable in programming, and why do we need it?"
+  },
+  {
+    "id": "loops",
+    "title": "Loops",
+    "summary": "Loops allow you to repeat a block of code multiple times without writing it out again. 'For' loops repeat a fixed number of times, while 'while' loops repeat until a condition changes.",
+    "sample_question": "What's the difference between a for loop and a while loop?"
+  },
+  {
+    "id": "conditionals",
+    "title": "Conditionals",
+    "summary": "Conditionals (if/else statements) let programs make decisions. The code checks whether a condition is true or false and executes different actions based on the result.",
+    "sample_question": "Explain how if/else statements help programs make decisions."
+  },
+  {
+    "id": "functions",
+    "title": "Functions",
+    "summary": "Functions are reusable blocks of code designed to perform a specific task. They help reduce duplication, improve readability, and make debugging easier.",
+    "sample_question": "What is a function, and why is it useful in programming?"
+  },
+  {
+    "id": "lists",
+    "title": "Lists",
+    "summary": "Lists are ordered collections that store multiple values under one variable. They help organize data and allow iteration using loops.",
+    "sample_question": "What is a list, and how is it typically used in programming?"
+  },
+  {
+    "id": "OOP_basics",
+    "title": "OOP Basics",
+    "summary": "Object-Oriented Programming organizes programs using objects that combine data and behavior. Four key ideas are: classes, objects, encapsulation, and inheritance.",
+    "sample_question": "Give a simple explanation of what a class and an object are."
+  }
+]
