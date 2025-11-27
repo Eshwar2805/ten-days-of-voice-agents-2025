@@ -1,0 +1,38 @@
+[
+  {
+    "caseId": "CASE001",
+    "userName": "Rahul Sharma",
+    "securityIdentifier": "89123",
+    "maskedCard": "**** **** **** 4242",
+    "transactionAmount": "₹4,599",
+    "transactionCurrency": "INR",
+    "merchantName": "Alpha Gadgets Store",
+    "transactionTime": "2025-11-25 10:45 AM",
+    "transactionLocation": "Mumbai, India",
+    "transactionCategory": "Electronics e-commerce",
+    "transactionSource": "alphagadgets.in",
+    "securityQuestion": "What is your favourite color?",
+    "securityAnswer": "blue",
+    "status": "verification_failed",
+    "outcomeNote": "Verification failed. Could not confirm identity.",
+    "lastUpdated": "2025-11-27T14:15:41.690055"
+  },
+  {
+    "caseId": "CASE002",
+    "userName": "Priya Verma",
+    "securityIdentifier": "55219",
+    "maskedCard": "**** **** **** 9931",
+    "transactionAmount": "₹12,250",
+    "transactionCurrency": "INR",
+    "merchantName": "Skyline Travels",
+    "transactionTime": "2025-11-25 08:10 PM",
+    "transactionLocation": "Delhi, India",
+    "transactionCategory": "Travel booking",
+    "transactionSource": "skytravelz.com",
+    "securityQuestion": "In which city were you born?",
+    "securityAnswer": "delhi",
+    "status": "confirmed_fraud",
+    "outcomeNote": "Customer denied the transaction. Card should be blocked and dispute initiated (mock).",
+    "lastUpdated": "2025-11-27T14:14:28.078234"
+  }
+]

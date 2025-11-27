@@ -2,7 +2,7 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -26,228 +26,276 @@ logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
 
-# ---------- Helper: load Zomato FAQ content ----------
+# ------------------ Helpers: load & save fraud cases ------------------
 
 
-def load_zomato_faq() -> Dict[str, Any]:
+def load_fraud_cases() -> List[Dict[str, Any]]:
     """
-    Load Zomato FAQ content from shared-data/day5_zomato_faq.json.
+    Load fraud cases from shared-data/day6_fraud_cases.json.
     """
+    base_dir = Path(__file__).resolve().parent.parent  # backend/
+    path = base_dir / "shared-data" / "day6_fraud_cases.json"
     try:
-        base_dir = Path(__file__).resolve().parent.parent  # backend/
-        path = base_dir / "shared-data" / "day5_zomato_faq.json"
         with path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-            if isinstance(data, dict) and "faqs" in data:
+            if isinstance(data, list):
                 return data
     except Exception as e:
-        logger.warning(f"Failed to load day5_zomato_faq.json: {e}")
-
-    # Very small fallback if file missing
-    return {
-        "company": "Zomato",
-        "description": "Zomato is an Indian food delivery and restaurant discovery platform.",
-        "faqs": [
-            {
-                "id": "fallback",
-                "q": "What does Zomato do?",
-                "a": "Zomato helps customers discover restaurants and order food online, and helps restaurants get more orders.",
-                "tags": ["zomato", "product"]
-            }
-        ],
-    }
+        logger.warning(f"Failed to load day6_fraud_cases.json: {e}")
+    return []
 
 
-class ZomatoSDR(Agent):
-    def __init__(self, faq_data: Dict[str, Any]) -> None:
-        self.faq_data = faq_data
-        self.faq_list: List[Dict[str, Any]] = faq_data.get("faqs", [])
-        self.company_name: str = faq_data.get("company", "Zomato")
-        self.company_desc: str = faq_data.get("description", "")
+def save_fraud_cases(cases: List[Dict[str, Any]]) -> None:
+    base_dir = Path(__file__).resolve().parent.parent  # backend/
+    path = base_dir / "shared-data" / "day6_fraud_cases.json"
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(cases, f, indent=2, ensure_ascii=False)
 
-        # Lead state kept in memory during the call
-        self.current_lead: Dict[str, Any] = {
-            "name": None,
-            "company": None,
-            "email": None,
-            "role": None,
-            "use_case": None,
-            "team_size": None,
-            "timeline": None,
-        }
 
-        # Where to store leads
-        base_dir = Path(__file__).resolve().parent.parent  # backend/
-        leads_dir = base_dir / "leads"
-        leads_dir.mkdir(parents=True, exist_ok=True)
-        self.leads_path = leads_dir / "day5_leads.json"
+class FraudAgent(Agent):
+    def __init__(self, cases: List[Dict[str, Any]]) -> None:
+        self.cases = cases
+        self.current_case_index: Optional[int] = None
+        self.verified: bool = False
+        self.bank_name = "Falcon Bank"  # fictional bank for demo only
 
         instructions = f"""
-You are a warm, professional Sales Development Representative (SDR) for {self.company_name}.
+You are a calm, professional fraud detection representative for {self.bank_name}.
 
-Company overview:
-{self.company_desc}
+Goal:
+- Handle a fraud alert call about a suspicious card transaction.
+- Verify the customer safely.
+- Read the suspicious transaction.
+- Ask if it was legitimate.
+- Mark the case as safe or fraudulent using the available tools.
 
-Your goals:
-1. Greet visitors warmly and explain that you are an SDR for {self.company_name}.
-2. Ask what brought them here and what they are working on.
-3. Keep the conversation focused on understanding their business and whether {self.company_name} is a good fit.
-4. Answer questions about the company, product, and pricing ONLY using the FAQ content and the `answer_faq` tool.
-5. Collect key lead details naturally during the conversation:
-   - Name
-   - Company
-   - Email
-   - Role
-   - Use case (what they want to use {self.company_name} for)
-   - Team size
-   - Timeline (now / soon / later)
-   When the user gives any of these, call the `save_lead_field` tool to store them.
+VERY IMPORTANT SAFETY RULES:
+- You MUST NOT ask for full card numbers, CVV, PIN, OTP, passwords, or any sensitive credentials.
+- You may only use:
+  - The customer's name,
+  - A simple security question from the database,
+  - Non-sensitive transaction details (merchant, amount, masked card, city).
 
-FAQ usage:
-- When the user asks things like:
-  - "What does your product do?"
-  - "Who is this for?"
-  - "Do you have a free tier?"
-  - "How does pricing work for restaurants?"
-  Use the `answer_faq` tool with their question.
-- Do NOT make up product or pricing details beyond what the FAQ provides.
-- If the FAQ does not contain the answer, say you are not sure and that a human teammate can share more details later.
+Call flow:
+1. Greet the user.
+   Example: "Hello, this is the fraud monitoring team from {self.bank_name}. Am I speaking with Rahul Sharma?"
+2. Ask for the customer's first name to identify the case.
+   Once you know their name, call the `load_case_for_user` tool.
+3. If no matching case is found:
+   - Politely say you don't have an active fraud alert under that name and end the call.
+4. If a case is found:
+   - Explain that you're calling about a suspicious transaction.
+   - Ask the security question from the case by calling `get_security_question`.
+   - When the user answers, call `verify_security_answer`.
+5. If verification fails:
+   - Apologize that you cannot proceed without verification.
+   - Call `mark_verification_failed` to update the case.
+   - End the call politely.
+6. If verification passes:
+   - Read out the suspicious transaction by using the data from the current case:
+     * merchant name,
+     * transaction amount,
+     * masked card ending,
+     * approximate time and location.
+   - Ask: "Did you make this transaction? Yes or no?"
+   - Based on the user's response, call `mark_transaction_status` with "safe" or "fraudulent".
 
-End-of-call behavior:
-- When the user says phrases like:
-  "That's all", "I'm done", "Thanks, that's it", or clearly ends the conversation:
-  1. Make sure you have collected as many lead fields as possible.
-  2. Call the `finalize_lead` tool ONCE to store the lead in JSON.
-  3. Then give a short verbal summary including:
-     - Their name and company (if known)
-     - Use case
-     - Team size
-     - Timeline
-  4. End politely and thank them for their time.
+7. At the end of the call:
+   - Summarize the outcome:
+     * If safe: say the transaction is confirmed as legitimate and no further action is needed.
+     * If fraud: say the card will be blocked and a dispute will be raised (mock).
+     * If verification failed: say you couldn't proceed without verification.
+   - Thank the user for their time.
 
-Important rules:
-- You are not a support agent; you are an SDR focusing on qualification and basic FAQs.
-- Be concise, friendly, and professional.
-- Never talk about tools, JSON, files, or internal implementation.
-- Do not show raw function calls or code like `tool_code` in your replies.
+Tool usage:
+- Use `load_case_for_user` as soon as you are confident of the user's name.
+- Use `get_security_question` once the case is loaded to ask verification.
+- Use `verify_security_answer` after user answers the security question.
+- Use `mark_transaction_status` after the user confirms or denies the transaction.
+- Use `mark_verification_failed` if verification fails.
+
+NEVER:
+- Mention tools, JSON, databases, or internal code.
+- Show or say raw tool calls like `tool_code`.
+- Invent real banks, real card numbers, or real customers.
 """
         super().__init__(instructions=instructions)
 
-    # ---------- Internal: simple FAQ search ----------
+    # ------------------ Internal helper ------------------
 
-    def _best_faq_match(self, question: str) -> Dict[str, Any] | None:
-        q_lower = question.lower()
-        best_score = 0
-        best_entry = None
+    def _find_case_by_name(self, user_name: str) -> Optional[int]:
+        uname = user_name.strip().lower()
+        for idx, case in enumerate(self.cases):
+            if case.get("userName", "").strip().lower() == uname:
+                return idx
+        return None
 
-        for entry in self.faq_list:
-            text = (
-                (entry.get("q") or "") + " "
-                + (entry.get("a") or "") + " "
-                + " ".join(entry.get("tags") or [])
-            ).lower()
-            score = 0
-            # simple keyword overlap
-            for token in q_lower.split():
-                if token in text:
-                    score += 1
-            if score > best_score:
-                best_score = score
-                best_entry = entry
+    def _current_case(self) -> Optional[Dict[str, Any]]:
+        if self.current_case_index is None:
+            return None
+        if 0 <= self.current_case_index < len(self.cases):
+            return self.cases[self.current_case_index]
+        return None
 
-        # if nothing matched, just return first entry
-        if best_entry is None and self.faq_list:
-            return self.faq_list[0]
-        return best_entry
+    def _save_current_case(self) -> None:
+        if self.current_case_index is None:
+            return
+        # writes self.cases back to JSON
+        save_fraud_cases(self.cases)
 
-    # ---------- Tools ----------
+    # ------------------ Tools ------------------
 
     @function_tool()
-    async def answer_faq(
+    async def load_case_for_user(
         self,
         context: RunContext,
-        question: str,
+        user_name: str,
     ) -> str:
         """
-        Look up an answer in the Zomato FAQ based on the user's question.
-        Only use this to answer product / company / pricing / who-is-it-for type questions.
+        Load a fraud case for the given user name (fake).
+        If found, set it as the active case for this call.
         """
-        entry = self._best_faq_match(question)
-        if not entry:
+        idx = self._find_case_by_name(user_name)
+        if idx is None:
             return (
-                "I'm not completely sure about that specific detail. A teammate from Zomato can share more information with you later."
+                "I couldn't find an active fraud alert under that name. "
+                "It's possible there is no suspicious activity on this account."
             )
-        return entry.get("a", "")
-
-    @function_tool()
-    async def save_lead_field(
-        self,
-        context: RunContext,
-        field: str,
-        value: str,
-    ) -> str:
-        """
-        Save a single lead field during the conversation.
-
-        Args:
-            field: one of: name, company, email, role, use_case, team_size, timeline
-            value: the value user provided
-        """
-        field = field.strip().lower()
-        if field not in self.current_lead:
-            return "I can't store that field, but thank you for sharing."
-
-        self.current_lead[field] = value.strip()
-        logger.info(f"[Lead] Updated field {field} = {value}")
-        return f"Got it, I've noted your {field} as {value}."
-
-    @function_tool()
-    async def finalize_lead(self, context: RunContext) -> str:
-        """
-        Write the collected lead information to a JSON file and return a short summary.
-        """
-        lead = self.current_lead.copy()
-        lead["timestamp"] = datetime.utcnow().isoformat()
-
-        # Load existing leads
-        try:
-            if self.leads_path.exists():
-                with self.leads_path.open("r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = []
-        except Exception as e:
-            logger.warning(f"Failed to read leads file, starting new list. Error: {e}")
-            data = []
-
-        if not isinstance(data, list):
-            data = []
-
-        data.append(lead)
-
-        # Write back
-        with self.leads_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        logger.info(f"[Lead] Saved lead: {lead}")
-
-        name = lead.get("name") or "Unknown name"
-        company = lead.get("company") or "Unknown company"
-        email = lead.get("email") or "No email provided"
-        role = lead.get("role") or "Unknown role"
-        use_case = lead.get("use_case") or "Not clearly specified yet"
-        team_size = lead.get("team_size") or "Not specified"
-        timeline = lead.get("timeline") or "No timeline mentioned"
-
-        summary = (
-            f"Here is the summary I captured: "
-            f"{name} from {company}, role {role}. "
-            f"Use case: {use_case}. Team size: {team_size}. "
-            f"Timeline: {timeline}. Contact email: {email}. "
-            "I'll share this with the Zomato team so they can follow up."
+        self.current_case_index = idx
+        self.verified = False
+        case = self.cases[idx]
+        logger.info(f"[Fraud] Loaded case {case.get('caseId')} for user {case.get('userName')}")
+        return (
+            f"Thank you. I have located your account, {case.get('userName')}. "
+            "Before we proceed, I need to verify your identity with a simple security question."
         )
 
-        return summary
+    @function_tool()
+    async def get_security_question(
+        self,
+        context: RunContext,
+    ) -> str:
+        """
+        Return the security question for the current case.
+        """
+        case = self._current_case()
+        if not case:
+            return "I don't have an active fraud case loaded yet."
+        question = case.get("securityQuestion") or "I don't have a security question on file."
+        return f"For security, please answer this question: {question}"
+
+    @function_tool()
+    async def verify_security_answer(
+        self,
+        context: RunContext,
+        answer: str,
+    ) -> str:
+        """
+        Verify the answer to the security question.
+        """
+        case = self._current_case()
+        if not case:
+            return "I don't have an active fraud case loaded yet."
+
+        expected = (case.get("securityAnswer") or "").strip().lower()
+        given = answer.strip().lower()
+
+        if expected and expected == given:
+            self.verified = True
+            logger.info(f"[Fraud] Verification passed for case {case.get('caseId')}")
+            return "Thank you, your identity is verified. I will now read out the suspicious transaction details."
+        else:
+            self.verified = False
+            logger.info(f"[Fraud] Verification FAILED for case {case.get('caseId')}")
+            return (
+                "I'm sorry, but the answer doesn't match our records. "
+                "For your security, I won't be able to discuss this transaction further."
+            )
+
+    @function_tool()
+    async def mark_verification_failed(
+        self,
+        context: RunContext,
+    ) -> str:
+        """
+        Mark the current case as verification_failed and persist to database.
+        """
+        case = self._current_case()
+        if not case:
+            return "I don't have an active fraud case loaded yet."
+        case["status"] = "verification_failed"
+        case["outcomeNote"] = "Verification failed. Could not confirm identity."
+        case["lastUpdated"] = datetime.utcnow().isoformat()
+        self._save_current_case()
+        logger.info(f"[Fraud] Case {case.get('caseId')} marked as verification_failed.")
+        return "I have recorded that we could not complete verification on this call."
+
+    @function_tool()
+    async def mark_transaction_status(
+        self,
+        context: RunContext,
+        status: str,
+    ) -> str:
+        """
+        Mark the current transaction as safe or fraudulent and persist to database.
+
+        Args:
+            status: one of "safe" or "fraudulent"
+        """
+        case = self._current_case()
+        if not case:
+            return "I don't have an active fraud case loaded yet."
+
+        status = status.strip().lower()
+        if status == "safe":
+            case["status"] = "confirmed_safe"
+            case["outcomeNote"] = "Customer confirmed the transaction as legitimate."
+            spoken = (
+                "Thank you for confirming. I have marked this transaction as legitimate, "
+                "and no further action is needed on your card."
+            )
+        elif status == "fraudulent":
+            case["status"] = "confirmed_fraud"
+            case["outcomeNote"] = "Customer denied the transaction. Card should be blocked and dispute initiated (mock)."
+            spoken = (
+                "Understood. I have marked this transaction as fraudulent. "
+                "We will block this card for your safety and raise a dispute for this charge in our system. "
+                "Our team may contact you with next steps."
+            )
+        else:
+            return "I can only mark a transaction as safe or fraudulent."
+
+        case["lastUpdated"] = datetime.utcnow().isoformat()
+        self._save_current_case()
+        logger.info(f"[Fraud] Case {case.get('caseId')} marked as {case['status']}.")
+        return spoken
+
+    @function_tool()
+    async def describe_current_transaction(
+        self,
+        context: RunContext,
+    ) -> str:
+        """
+        Return a natural language description of the suspicious transaction for the current case.
+        """
+        case = self._current_case()
+        if not case:
+            return "I don't have an active fraud case loaded yet."
+
+        merchant = case.get("merchantName") or "a merchant"
+        amount = case.get("transactionAmount") or "an amount"
+        currency = case.get("transactionCurrency") or ""
+        masked_card = case.get("maskedCard") or "your card ending in XXXX"
+        time = case.get("transactionTime") or "recently"
+        location = case.get("transactionLocation") or "your region"
+        category = case.get("transactionCategory") or "a purchase"
+
+        desc = (
+            f"We detected a {category} transaction at {merchant} for {amount} {currency} "
+            f"on your card {masked_card}, around {time}, in {location}. "
+            "Did you make this transaction?"
+        )
+        return desc
 
 
 # ----------------------- Session Setup -----------------------
@@ -260,10 +308,8 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    faq_data = load_zomato_faq()
-    logger.info(
-        f"Day 5 SDR – loaded {len(faq_data.get('faqs', []))} FAQ entries for {faq_data.get('company')}."
-    )
+    cases = load_fraud_cases()
+    logger.info(f"Day 6 Fraud Agent – loaded {len(cases)} fraud case(s).")
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
@@ -293,7 +339,7 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(log_usage)
 
     await session.start(
-        agent=ZomatoSDR(faq_data=faq_data),
+        agent=FraudAgent(cases=cases),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
